@@ -14,6 +14,7 @@ on:
         - "Heavenly.Delusion"
         - "Hells.Paradise.Jigokuraku"
         - "Insomniacs.After.School"
+        - "The.Eminence.in.Shadow"
         - "Miraculous.Tales.of.Ladybug.and.Cat.Noir"
       EpLabel:
         description: "EpLabel, S0[0-9]E[0-9][0-9]"
