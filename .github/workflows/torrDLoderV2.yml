@@ -138,7 +138,7 @@ jobs:
           eval 'set -o history' 2>/dev/null
       - name: Upload Incomplete Files As Artifact
         if: env.secondPhaser == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         continue-on-error: true
         with:
           name: artifact
