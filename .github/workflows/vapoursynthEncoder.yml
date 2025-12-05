@@ -196,7 +196,7 @@ jobs:
           source ./splitGen.sh
           eval 'set -o history' 2>/dev/null
       - name: Upload Source Media as Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         continue-on-error: true
         with:
           name: artifact
@@ -204,7 +204,7 @@ jobs:
           retention-days: 3
       - name: Upload Source Media as Artifact
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           name: artifact
           path: ~/data/${{env.AnimeName}}.${{env.EpLabel}}.SOURCE.mkv.${{env.artnum}}
@@ -268,7 +268,7 @@ jobs:
           eval 'set -o history' 2>/dev/null
       - name: Upload Av1an Error Log as Artifact
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           path: ~/data/enclog.log
           name: enclog.${{env.ChunkID}}
@@ -315,7 +315,7 @@ jobs:
           eval 'set -o history' 2>/dev/null
       - name: Upload VapourCod3d Video Stream as Artifact
         if: success()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           path: ~/data/${{env.AnimeName}}.${{env.EpLabel}}.*.AV1-fr3aky.mkv   # Match ${FinalEncodedVideo} name
           name: ${{env.AnimeName}}.${{env.EpLabel}}.Q${{env.QScale}}.VapourCod3d.Result
