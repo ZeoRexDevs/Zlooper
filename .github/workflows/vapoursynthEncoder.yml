@@ -85,7 +85,7 @@ jobs:
       artmatrix: ${{ steps.set-artmatrix.outputs.artmatrix }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           ref: 'main'
       - name: GitHub Auth
@@ -160,7 +160,7 @@ jobs:
       artchunk: ${{ needs.generator.outputs.artchunk }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           ref: 'main'
       - name: GitHub Auth
@@ -225,7 +225,7 @@ jobs:
       ChunkID: ${{ matrix.ChunkID }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           ref: 'main'
       - name: GitHub Auth
@@ -282,7 +282,7 @@ jobs:
     needs: [generator, synthesizer]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           ref: 'main'
       - name: GitHub Auth
