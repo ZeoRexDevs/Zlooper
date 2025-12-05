@@ -202,7 +202,7 @@ jobs:
       - name: Download Incomplete Files from Artifact
         if: success()
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: artifact
           path: /data/media/TorrDLoader/
