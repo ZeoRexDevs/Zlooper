@@ -14,7 +14,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - uses: igorjs/gh-actions-clean-workflow@v4
+      - uses: igorjs/gh-actions-clean-workflow@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           days_old: ${{ github.event.inputs.days_old }}
