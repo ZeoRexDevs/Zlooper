@@ -238,7 +238,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Download Source Media from Artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v7
         with:
           name: artifact
           path: ~/data/artifact/
