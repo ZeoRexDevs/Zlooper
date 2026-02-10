@@ -1,6 +1,6 @@
-name: TorrDLoader
+name: Torrent2Drive
 
-run-name: "TorrDLoader for ${{ inputs.JobDestType }}"
+run-name: "Torrent2Drive for ${{ inputs.CustomDest || inputs.JobDestType }}"
 
 on:
   workflow_dispatch:
@@ -18,25 +18,30 @@ on:
         required: false
         type: string
       JobDestType:
-        description: "Destination, Public / ShareZone/ AniMaze"
-        required: true
+        description: "Destination, AniMaze / Public / ShareZone"
+        required: false
         type: choice
         options:
+        - "AniMaze"
         - "Public"
         - "ShareZone"
-        - "AniMaze"
+        - ""
+      CustomDest:
+        description: "Custom Destination Folder"
+        required: false
+        type: string
+        default: ""
       CustomEnvs:
-        description: "Custom Env Vars (pipe-separated), x=a|y=2"
+        description: "Custom Env Vars (pipe-separated), Seed|SeedTime|.."
         type: string
         required: false
-
 
 env:
   baseScrAddr: "https://gist.github.com/rokibhasansagar/defcf75ce810fa40ac6200d089de969b"
   TorrentURL: ${{ github.event.inputs.TorrentURL }}
   MagnetURI: ${{ github.event.inputs.MagnetURI }}
   FileIdx: ${{ github.event.inputs.FileIdx }}
-  JobDestType: ${{ github.event.inputs.JobDestType }}
+  UploadPath: ${{ github.event.inputs.JobDestType || github.event.inputs.CustomDest }}
   CustomEnvs: ${{ github.event.inputs.CustomEnvs }}
   TorrDLoader_Hash: ${{ secrets.TorrDLoader_Hash }}
   RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
@@ -44,7 +49,7 @@ env:
 jobs:
   transloader:
     name: "Torrent Downloader"
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
@@ -60,14 +65,14 @@ jobs:
       - name: Run TorrDLoader Script
         run: |
           # Prepare Custom Env Var Overrides
-          if [[ ${CustomEnvs} != '' ]]; then
-            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
-              v=$(awk -F'=' '{print $1}' <<<"${i}")
-              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
-              echo $v="$w" && export $v=$w
-            done
+          if [[ -n "$CustomEnvs" ]]; then
+            while IFS='=' read -r k v; do
+              [[ -z "$k" ]] && continue
+              export "$k"="${v//\"/}"
+              echo "$k"="${v//\"/}"
+            done < <(sed 's/|/\n/g' <<<"$CustomEnvs")
           fi
-          unset v w 2>/dev/null || true
+          unset k v 2>/dev/null || true
           # Execute Script Stealthly
           eval 'set -eo pipefail' 2>/dev/null
           eval 'set +o history' 2>/dev/null
@@ -76,28 +81,22 @@ jobs:
           echo -e "latestRevision=${baseScrHash}"
 
           # Get Scriptlets
-          ( curl -sL "${baseScrAddr}/raw/${baseScrHash}/zSystemdResolved.fix" | bash 2>/dev/null || true )
-          curl -sL "${baseScrAddr}/raw/${baseScrHash}/torrent-to-ms365.base.sh" -o torrent-to-ms365.base.script
-          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zPublicUpload.block" -O
-          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zShareZoneUpload.block" -O
-          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zAniMazeMod.block" -O
-          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zAniMazeUpload.block" -O
-          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zSeed.block" -O
+          ( curl -sL "${baseScrAddr}/raw/${baseScrHash}/zzSystemdResolved.fix" | bash 2>/dev/null || true )
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/torrent2drive.base.sh" -o torrent2drive.base.script
+          for split in zUploadGeneral z{Mod,Upload}AniMaze zSeed; do
+            curl -sL "${baseScrAddr}/raw/${baseScrHash}/${split}.block" -O
+          done
+          sed -i '1,2d' *.block
 
           # Put Together The Complete Script
-          case "${JobDestType}" in
-            "Public")
-              sed -i -e '/Upload Block/r zPublicUpload.block' ./torrent-to-ms365.base.script
-              ;;
-            "ShareZone")
-              sed -i -e '/Upload Block/r zShareZoneUpload.block' ./torrent-to-ms365.base.script
-              ;;
-            "AniMaze")
-              sed -i -e '/Modification Block/r zAniMazeMod.block' ./torrent-to-ms365.base.script
-              sed -i -e '/Upload Block/r zAniMazeUpload.block' ./torrent-to-ms365.base.script
-              ;;
-          esac
-          sed -e '/Seed Block/r zSeed.block' ./torrent-to-ms365.base.script >./torrentLoader.sh
+          if [[ "${UploadPath}" == "AniMaze" ]]; then
+            sed -i -e '/__Modification Block__/r zModAniMaze.block' ./torrent2drive.base.script
+            sed -i -e '/__Upload Block__/r zUploadAniMaze.block' ./torrent2drive.base.script
+          else
+            sed -i -e '/__Upload Block__/r zUploadGeneral.block' ./torrent2drive.base.script
+          fi
+
+          sed -e '/__Seed Block__/r zSeed.block' ./torrent2drive.base.script >./torrentLoader.sh
 
           # Run Script
           source ./torrentLoader.sh
