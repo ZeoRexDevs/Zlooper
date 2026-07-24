@@ -1,0 +1,130 @@
+name: Remote AI Coding Chat Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_tag:
+        description: 'Qwen Coder Model Tag (e.g., qwen2.5-coder:7b, qwen2.5-coder:14b, qwen3-coder)'
+        required: true
+        default: 'qwen2.5-coder:3b'
+        type: string
+      session_timeout:
+        description: 'Keep-alive duration in minutes (max 360)'
+        required: true
+        default: '120'
+
+jobs:
+  launch-chat-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Cache Ollama Weights
+        uses: actions/cache@v6
+        with:
+          path: ~/.ollama/models
+          key: ollama-weights-${{ runner.os }}-${{ inputs.model_tag }}-nomic
+          restore-keys: ollama-weights-${{ runner.os }}-
+
+      - name: Install & Start Ollama Daemon
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          timeout 30 bash -c 'until curl -s http://localhost:11434/api/tags > /dev/null; do sleep 1; done'
+          echo "Ollama API ready."
+
+      - name: Pull Models & Apply 4-vCPU Coding Parameters
+        run: |
+          # Pull target coding model and high-capacity embedding engine
+          ollama pull ${{ inputs.model_tag }}
+          ollama pull nomic-embed-text:latest
+
+          # Create a custom Modelfile tuned for 4 vCPU / 16 GB RAM runners
+          cat <<EOF > Modelfile.coder
+          FROM ${{ inputs.model_tag }}
+
+          # 4 vCPU & 16 GB RAM Optimization Parameters
+          PARAMETER num_thread 4
+          PARAMETER num_ctx 4096
+          PARAMETER temperature 0.2
+          PARAMETER top_p 0.9
+          PARAMETER repeat_penalty 1.1
+
+          # Enforce rigorous coding assistant behavior
+          SYSTEM """
+          You are an expert software architect, code builder, and debugging assistant.
+          When writing code, prioritize clean, modular, and well-documented solutions.
+          When debugging or reasoning through a complex problem, break down your logic step-by-step before presenting the final code.
+          """
+          EOF
+
+          ollama create qwen-coder-tuned -f Modelfile.coder
+          echo "Custom coding model 'qwen-coder-tuned' and embedding engine compiled successfully."
+
+      - name: Launch Open WebUI (Docker with Large File & Ollama RAG Support)
+        run: |
+          docker run -d \
+            --network=host \
+            -e OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+            -e WEBUI_AUTH=False \
+            `# RAG Embedding Configuration (Ollama Offload)` \
+            -e RAG_EMBEDDING_ENGINE=ollama \
+            -e RAG_EMBEDDING_MODEL=nomic-embed-text:latest \
+            -e RAG_OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+            `# Large File Upload & Code Chunking Tuning` \
+            -e FILE_MAX_SIZE=100 \
+            -e CHUNK_SIZE=2048 \
+            -e CHUNK_OVERLAP=150 \
+            --name open-webui \
+            --restart always \
+            ghcr.io/open-webui/open-webui:main
+
+          # Wait for WebUI startup
+          timeout 60 bash -c 'until curl -s http://localhost:8080 > /dev/null; do sleep 2; done'
+          echo "Open WebUI running on port 8080 with large file upload support."
+
+      - name: Expose Web UI via Cloudflare Tunnel (No Registration Required)
+        id: tunnel
+        run: |
+          # Download cloudflared CLI
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+          # Start ephemeral tunnel in background (trycloudflare.com requires zero registration)
+          cloudflared tunnel --url http://localhost:8080 --logfile cloudflared.log &
+
+          # Wait for URL generation and output to Job Summary
+          sleep 8
+          TUNNEL_URL=$(grep -o 'https://[^"]*\.trycloudflare\.com' cloudflared.log | head -n 1)
+
+          echo "### 🌐 Web Chat Interface Ready" >> $GITHUB_STEP_SUMMARY
+          echo "**Access your remote Qwen Coder UI here:** [$TUNNEL_URL]($TUNNEL_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> *Note: Cloudflare Quick Tunnels require no account or registration. Do not paste sensitive API keys onto unauthenticated endpoints.*" >> $GITHUB_STEP_SUMMARY
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+
+      - name: Expose Interactive SSH via Tmate
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+
+      - name: Output SSH Connection Details
+        run: |
+          echo "### 💻 Terminal SSH Access Ready" >> $GITHUB_STEP_SUMMARY
+          echo "To chat via CLI, SSH into the runner and execute:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo 'ollama run qwen-coder-tuned' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Maintain Session Active
+        run: |
+          echo "Server is live! Web UI: $TUNNEL_URL"
+          echo "Keeping runner alive for ${{ inputs.session_timeout }} minutes..."
+          sleep $(( ${{ inputs.session_timeout }} * 60 ))
+
