@@ -1,0 +1,173 @@
+name: Rclone Remote Groups Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui_user:
+        description: 'HTTP Serve Username'
+        required: true
+        default: 'admin'
+      ui_pass:
+        description: 'HTTP Serve Password'
+        required: true
+        default: 'admin123'
+
+jobs:
+  run-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Rclone & Tools
+        run: |
+          sudo curl https://rclone.org/install.sh | sudo bash
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Fetch Rclone Config from Gist
+        env:
+          RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
+        run: |
+          echo "[i] Synchronizing Rclone configurations..."
+          mkdir -p ~/.config/rclone
+
+          TEMP_GIST_DIR=$(mktemp -d)
+          git clone -q "https://gist.github.com/${RCLONE_CONFIG_HASH}.git" "${TEMP_GIST_DIR}"
+
+          # Concatenate all config parts safely
+          cat "${TEMP_GIST_DIR}"/*.rclone.config > ~/.config/rclone/rclone.conf
+          rm -rf "${TEMP_GIST_DIR}"
+
+      - name: Install Cloudflared
+        run: |
+          curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Parse Groups, Serve, and Tunnel
+        run: |
+          # Dump the config to JSON and use jq 'del()' to completely exclude ms365
+          # If you ever need to exclude more in the future, just add them: del(.ms365, .another_broken)
+          CONFIG_JSON=$(rclone config dump | jq 'del(.ms365)')
+
+          TARGETS=()
+          DISPLAYS=()
+          PORTS=()
+
+          add_group() {
+              local GROUP_NAME=$1
+              local DISPLAY_NAME=$2
+              local TYPE_FILTER=$3
+
+              # Extract matching remotes using jq
+              local REMOTES_STR=$(echo "$CONFIG_JSON" | jq -r "to_entries | map(select(${TYPE_FILTER})) | .[].key")
+              if [ -z "$REMOTES_STR" ]; then return; fi
+
+              # Convert newline separated string into an array
+              local REMOTES=($REMOTES_STR)
+
+              if [ ${#REMOTES[@]} -eq 0 ]; then return; fi
+
+              if [ ${#REMOTES[@]} -eq 1 ]; then
+                  # Single remote: serve directly
+                  TARGETS+=("${REMOTES[0]}:")
+                  DISPLAYS+=("$DISPLAY_NAME (${REMOTES[0]})")
+              else
+                  # Multiple remotes: create a combine backend dynamically
+                  local UPSTREAMS=""
+                  for R in "${REMOTES[@]}"; do
+                      UPSTREAMS="${UPSTREAMS}${R}=${R}: "
+                  done
+                  rclone config create "COMBINE_${GROUP_NAME}" combine upstreams="${UPSTREAMS% }" >/dev/null 2>&1
+                  TARGETS+=("COMBINE_${GROUP_NAME}:")
+                  DISPLAYS+=("$DISPLAY_NAME (Combined ${#REMOTES[@]} remotes)")
+              fi
+          }
+
+          echo "========================================================="
+          echo "⚙️ Organizing your remotes (ms365 excluded)..."
+
+          # 1. Group remotes based on your requested types
+          add_group "GDRIVE" "Google Drive" '.value.type == "drive"'
+          add_group "ONEDRIVE" "OneDrive" '.value.type == "onedrive"'
+          add_group "MEGA" "MegaNZ" '.value.type == "mega"'
+          # add_group "IA" "Internet Archive" '.value.type == "internetarchive"'
+          # add_group "PROTON" "ProtonDrive" '.value.type == "protondrive"'
+
+          # Anything else that is NOT a combine backend goes into the Others bucket
+          add_group "OTHERS" "Other Remotes" '.value.type != "drive" and .value.type != "onedrive" and .value.type != "mega" and .value.type != "internetarchive" and .value.type != "protondrive" and .value.type != "combine"'
+
+          USER="${{ github.event.inputs.ui_user }}"
+          PASS="${{ github.event.inputs.ui_pass }}"
+
+          if [ ${#TARGETS[@]} -eq 0 ]; then
+             echo "No remotes found in config!"
+             exit 1
+          fi
+
+          echo "========================================================="
+          echo "🚀 Starting Serves and Tunnels..."
+
+          PORT=8080
+          for i in "${!TARGETS[@]}"; do
+             TARGET="${TARGETS[$i]}"
+             DISPLAY="${DISPLAYS[$i]}"
+             PORTS+=($PORT)
+
+             echo "-> Serving $DISPLAY on Port $PORT"
+             # Execute serve with optimizations
+             rclone serve http "$TARGET" \
+               --addr=:$PORT \
+               --user="$USER" \
+               --pass="$PASS" \
+               --fast-list \
+               --vfs-cache-mode minimal &
+
+             # Small delay to let rclone bind to the port
+             sleep 1
+
+             echo "-> Requesting Cloudflare Tunnel for Port $PORT..."
+             cloudflared tunnel --url http://localhost:$PORT > cf_${PORT}.log 2>&1 &
+
+             # VERY IMPORTANT: Wait 3 seconds before requesting the next tunnel 
+             # to prevent Cloudflare from internally rejecting the request
+             sleep 3
+
+             PORT=$((PORT + 1))
+          done
+
+          echo "========================================================="
+          echo "⏳ Waiting for Cloudflare URLs to generate..."
+          sleep 7
+
+          echo "========================================================="
+          echo "🌐 YOUR CLOUD ENVIRONMENT IS LIVE!"
+          echo "========================================================="
+          echo "👤 Username: $USER"
+          echo "🔑 Password: $PASS"
+          echo "---------------------------------------------------------"
+
+          # Fetch and print all generated URLs
+          for i in "${!TARGETS[@]}"; do
+             PORT="${PORTS[$i]}"
+             DISPLAY="${DISPLAYS[$i]}"
+
+             URL=""
+             # Attempt to fetch URL from log, retry every 2 seconds if not ready
+             for attempt in {1..10}; do
+                URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare\.com' cf_${PORT}.log | head -n 1)
+                if [ -n "$URL" ]; then break; fi
+                sleep 2
+             done
+
+             if [ -z "$URL" ]; then
+                URL="FAILED TO GENERATE - Try checking GitHub Action logs for cf_${PORT}.log"
+             fi
+
+             echo "📁 $DISPLAY"
+             echo "🔗 $URL"
+             echo "---------------------------------------------------------"
+          done
+
+          echo "========================================================="
+          echo "⏱️ Note: Cancel the workflow manually when you are done."
+
+      - name: Keep-Alive
+        run: sleep 14400
+
